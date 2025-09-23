@@ -3,8 +3,18 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+#mlruns
+mlruns/
+
+#macOS
+.DS_Store
+
 # C extensions
 *.so
+
+# dvc
+.dvc/tmp/
+.dvc/cache/
 
 # Distribution / packaging
 .Python
