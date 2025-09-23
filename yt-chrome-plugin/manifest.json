@@ -1,0 +1,15 @@
+{
+  "manifest_version": 3,
+  "name": "YouTube Sentiment Insights",
+  "version": "1.0",
+  "description": "Analyzes YouTube video comments for sentiment.",
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "permissions": [
+    "http://localhost:5001/*",
+    "http://127.0.0.1:5001/*",
+    "http://192.168.1.59:5001/*",
+    "https://www.googleapis.com/*"
+  ]
+}
