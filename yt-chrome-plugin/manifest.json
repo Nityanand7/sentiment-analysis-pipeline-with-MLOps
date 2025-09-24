@@ -1,15 +1,13 @@
 {
   "manifest_version": 3,
-  "name": "YouTube Sentiment Insights",
+  "name": "YouTube Comment Insights",
   "version": "1.0",
-  "description": "Analyzes YouTube video comments for sentiment.",
-  "action": {
-    "default_popup": "popup.html"
-  },
-  "permissions": [
-    "http://localhost:5001/*",
-    "http://127.0.0.1:5001/*",
-    "http://192.168.1.59:5001/*",
-    "https://www.googleapis.com/*"
+  "action": { "default_popup": "popup.html" },
+  "permissions": ["activeTab", "tabs", "scripting"],
+  "host_permissions": [
+    "http://127.0.0.1:5002/*",
+    "http://localhost:5002/*",
+    "https://www.googleapis.com/*",
+    "https://www.youtube.com/*"
   ]
 }

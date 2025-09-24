@@ -1,322 +1,277 @@
+# app.py
 import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend before importing pyplot
+matplotlib.use("Agg")  # headless backend
 
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import io
-import matplotlib.pyplot as plt
-from wordcloud import WordCloud
-import mlflow
-import numpy as np
 import re
+import json
+import pickle
+import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from collections import Counter
 from nltk.corpus import stopwords
 from nltk.stem import WordNetLemmatizer
-from mlflow.tracking import MlflowClient
-import matplotlib.dates as mdates
-import pickle
 
+# --------------------------
+# App setup
+# --------------------------
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+CORS(app)  # allow chrome extension
 
-# Define the preprocessing function
-def preprocess_comment(comment):
-    """Apply preprocessing transformations to a comment."""
-    try:
-        # Convert to lowercase
-        comment = comment.lower()
-
-        # Remove trailing and leading whitespaces
-        comment = comment.strip()
-
-        # Remove newline characters
-        comment = re.sub(r'\n', ' ', comment)
-
-        # Remove non-alphanumeric characters, except punctuation
-        comment = re.sub(r'[^A-Za-z0-9\s!?.,]', '', comment)
-
-        # Remove stopwords but retain important ones for sentiment analysis
-        stop_words = set(stopwords.words('english')) - {'not', 'but', 'however', 'no', 'yet'}
-        comment = ' '.join([word for word in comment.split() if word not in stop_words])
-
-        # Lemmatize the words
-        lemmatizer = WordNetLemmatizer()
-        comment = ' '.join([lemmatizer.lemmatize(word) for word in comment.split()])
-
-        return comment
-    except Exception as e:
-        print(f"Error in preprocessing comment: {e}")
-        return comment
-
-
-''' Load the model and vectorizer from the model registry and local storage
-def load_model_and_vectorizer(model_name, model_version, vectorizer_path):
-     # Set MLflow tracking URI to your server
-    mlflow.set_tracking_uri("http://ec2-54-161-28-113.compute-1.amazonaws.com:5000/")  # Replace with your MLflow tracking URI
-    client = MlflowClient()
-    model_uri = f"models:/{model_name}/{model_version}"
-    model = mlflow.pyfunc.load_model(model_uri)
-    with open(vectorizer_path, 'rb') as file:
-        vectorizer = pickle.load(file)
-   
-    return model, vectorizer '''
-
+# --------------------------
+# Load model + vectorizer
+# --------------------------
 def load_model(model_path, vectorizer_path):
-    """Load the trained model."""
+    with open(model_path, "rb") as f:
+        model = pickle.load(f)
+    with open(vectorizer_path, "rb") as f:
+        vectorizer = pickle.load(f)
+    return model, vectorizer
+
+# Adjust paths if needed (they’re relative to where you run app.py)
+model, vectorizer = load_model("./lgbm_model.pkl", "./tfidf_vectorizer.pkl")
+
+# --------------------------
+# Text preprocessing
+# --------------------------
+def preprocess_comment(comment: str) -> str:
     try:
-        with open(model_path, 'rb') as file:
-            model = pickle.load(file)
-        
-        with open(vectorizer_path, 'rb') as file:
-            vectorizer = pickle.load(file)
-      
-        return model, vectorizer
-    except Exception as e:
-        raise
+        comment = (comment or "").lower().strip()
+        comment = re.sub(r"\n", " ", comment)
+        comment = re.sub(r"[^A-Za-z0-9\s!?.,]", "", comment)
+        keep_words = {"not", "but", "however", "no", "yet"}
+        sw = set(stopwords.words("english")) - keep_words
+        comment = " ".join(w for w in comment.split() if w not in sw)
+        lemma = WordNetLemmatizer()
+        comment = " ".join(lemma.lemmatize(w) for w in comment.split())
+        return comment
+    except Exception:
+        return comment or ""
 
-# Initialize the model and vectorizer
-model, vectorizer = load_model("lgbm_model.pkl", "tfidf_vectorizer.pkl")  
-
-# Initialize the model and vectorizer
-# model, vectorizer = load_model_and_vectorizer("my_model", "1", "./tfidf_vectorizer.pkl")  # Update paths and versions as needed
-
-@app.route('/')
+# --------------------------
+# Routes
+# --------------------------
+@app.get("/")
 def home():
-    return "Welcome to our flask api"
+    return "Welcome to YouTube sentiment API"
 
-
-@app.route('/predict_with_timestamps', methods=['POST'])
-def predict_with_timestamps():
-    data = request.json
-    comments_data = data.get('comments')
-    
-    if not comments_data:
-        return jsonify({"error": "No comments provided"}), 400
-
-    try:
-        comments = [item['text'] for item in comments_data]
-        timestamps = [item['timestamp'] for item in comments_data]
-
-        # Preprocess each comment before vectorizing
-        preprocessed_comments = [preprocess_comment(comment) for comment in comments]
-        
-        # Transform comments using the vectorizer
-        transformed_comments = vectorizer.transform(preprocessed_comments)
-
-        # Convert the sparse matrix to dense format
-        dense_comments = transformed_comments.toarray()  # Convert to dense array
-        
-        # Make predictions
-        predictions = model.predict(dense_comments).tolist()  # Convert to list
-        
-        # Convert predictions to strings for consistency
-        predictions = [str(pred) for pred in predictions]
-    except Exception as e:
-        return jsonify({"error": f"Prediction failed: {str(e)}"}), 500
-    
-    # Return the response with original comments, predicted sentiments, and timestamps
-    response = [{"comment": comment, "sentiment": sentiment, "timestamp": timestamp} for comment, sentiment, timestamp in zip(comments, predictions, timestamps)]
-    return jsonify(response)
-
-
-@app.route('/predict', methods=['POST'])
+@app.post("/predict")
 def predict():
-    data = request.json
-    comments = data.get('comments')
-    print("i am the comment: ",comments)
-    print("i am the comment type: ",type(comments))
-    
+    data = request.get_json(force=True) or {}
+    comments = data.get("comments", [])
     if not comments:
         return jsonify({"error": "No comments provided"}), 400
 
+    texts = [preprocess_comment(c) for c in comments]
+    X = vectorizer.transform(texts)
     try:
-        # Preprocess each comment before vectorizing
-        preprocessed_comments = [preprocess_comment(comment) for comment in comments]
-        
-        # Transform comments using the vectorizer
-        transformed_comments = vectorizer.transform(preprocessed_comments)
+        preds = model.predict(X)
+    except Exception:
+        preds = model.predict(X.toarray())
 
-        # Convert the sparse matrix to dense format
-        dense_comments = transformed_comments.toarray()  # Convert to dense array
-        
-        # Make predictions
-        predictions = model.predict(dense_comments).tolist()  # Convert to list
-        
-        # Convert predictions to strings for consistency
-        # predictions = [str(pred) for pred in predictions]
-    except Exception as e:
-        return jsonify({"error": f"Prediction failed: {str(e)}"}), 500
-    
-    # Return the response with original comments and predicted sentiments
-    response = [{"comment": comment, "sentiment": sentiment} for comment, sentiment in zip(comments, predictions)]
-    return jsonify(response)
+    return jsonify([{"comment": c, "sentiment": str(p)} for c, p in zip(comments, preds)])
 
+@app.post("/predict_with_timestamps")
+def predict_with_timestamps():
+    """
+    Expects:
+      { "comments": [ { "text": "...", "timestamp": "...", "authorId": "..." }, ... ] }
+    Returns:
+      [ { "comment": "...", "sentiment": "-1|0|1", "timestamp": "..." }, ... ]
+    """
+    data = request.get_json(force=True) or {}
+    items = data.get("comments")
+    if not items or not isinstance(items, list):
+        return jsonify({"error": "No comments provided"}), 400
 
-@app.route('/generate_chart', methods=['POST'])
+    texts = [preprocess_comment(i.get("text", "")) for i in items]
+    ts = [i.get("timestamp") for i in items]
+
+    X = vectorizer.transform(texts)
+    try:
+        preds = model.predict(X)
+    except Exception:
+        preds = model.predict(X.toarray())
+    preds = [str(p) for p in preds]
+
+    # If your model returns label strings, map them:
+    mapped = []
+    for p in preds:
+        pl = p.lower()
+        if pl in {"positive", "neutral", "negative"}:
+            p = {"positive": "1", "neutral": "0", "negative": "-1"}[pl]
+        mapped.append(p)
+
+    return jsonify([
+        {"comment": i.get("text", ""), "sentiment": m, "timestamp": t}
+        for i, m, t in zip(items, mapped, ts)
+    ])
+
+@app.post("/generate_chart")
 def generate_chart():
-    try:
-        data = request.get_json()
-        sentiment_counts = data.get('sentiment_counts')
-        
-        if not sentiment_counts:
-            return jsonify({"error": "No sentiment counts provided"}), 400
+    """Pie chart for sentiment distribution. Body: { sentiment_counts: {"1":n,"0":m,"-1":k} }"""
+    data = request.get_json(force=True) or {}
+    counts = data.get("sentiment_counts", {})
+    if not counts:
+        return jsonify({"error": "No sentiment counts provided"}), 400
 
-        # Prepare data for the pie chart
-        labels = ['Positive', 'Neutral', 'Negative']
-        sizes = [
-            int(sentiment_counts.get('1', 0)),
-            int(sentiment_counts.get('0', 0)),
-            int(sentiment_counts.get('-1', 0))
-        ]
-        if sum(sizes) == 0:
-            raise ValueError("Sentiment counts sum to zero")
-        
-        colors = ['#36A2EB', '#C9CBCF', '#FF6384']  # Blue, Gray, Red
+    labels = ["Positive", "Neutral", "Negative"]
+    sizes = [int(counts.get("1", 0)), int(counts.get("0", 0)), int(counts.get("-1", 0))]
+    if sum(sizes) == 0:
+        return jsonify({"error": "Counts sum to zero"}), 400
 
-        # Generate the pie chart
-        plt.figure(figsize=(6, 6))
-        plt.pie(
-            sizes,
-            labels=labels,
-            colors=colors,
-            autopct='%1.1f%%',
-            startangle=140,
-            textprops={'color': 'w'}
-        )
-        plt.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle.
+    colors = ["#36A2EB", "#C9CBCF", "#FF6384"]
+    plt.figure(figsize=(6, 6))
+    plt.pie(sizes, labels=labels, colors=colors, autopct="%1.1f%%", startangle=140, textprops={"color": "w"})
+    plt.axis("equal")
+    buf = io.BytesIO()
+    plt.savefig(buf, format="PNG", transparent=True)
+    buf.seek(0)
+    plt.close()
+    return send_file(buf, mimetype="image/png")
 
-        # Save the chart to a BytesIO object
-        img_io = io.BytesIO()
-        plt.savefig(img_io, format='PNG', transparent=True)
-        img_io.seek(0)
-        plt.close()
-
-        # Return the image as a response
-        return send_file(img_io, mimetype='image/png')
-    except Exception as e:
-        app.logger.error(f"Error in /generate_chart: {e}")
-        return jsonify({"error": f"Chart generation failed: {str(e)}"}), 500
-    
-
-@app.route('/generate_wordcloud', methods=['POST'])
+@app.post("/generate_wordcloud")
 def generate_wordcloud():
-    try:
-        data = request.get_json()
-        comments = data.get('comments')
+    """Word cloud from comments. Body: { comments: ["...","..."] }"""
+    from wordcloud import WordCloud
+    data = request.get_json(force=True) or {}
+    comments = data.get("comments", [])
+    if not comments:
+        return jsonify({"error": "No comments provided"}), 400
 
-        if not comments:
-            return jsonify({"error": "No comments provided"}), 400
+    text = " ".join(preprocess_comment(c) for c in comments)
+    wc = WordCloud(width=800, height=400, background_color="black", colormap="Blues",
+                   stopwords=set(stopwords.words("english")), collocations=False).generate(text)
+    buf = io.BytesIO()
+    wc.to_image().save(buf, format="PNG")
+    buf.seek(0)
+    return send_file(buf, mimetype="image/png")
 
-        # Preprocess comments
-        preprocessed_comments = [preprocess_comment(comment) for comment in comments]
-
-        # Combine all comments into a single string
-        text = ' '.join(preprocessed_comments)
-
-        # Generate the word cloud
-        wordcloud = WordCloud(
-            width=800,
-            height=400,
-            background_color='black',
-            colormap='Blues',
-            stopwords=set(stopwords.words('english')),
-            collocations=False
-        ).generate(text)
-
-        # Save the word cloud to a BytesIO object
-        img_io = io.BytesIO()
-        wordcloud.to_image().save(img_io, format='PNG')
-        img_io.seek(0)
-
-        # Return the image as a response
-        return send_file(img_io, mimetype='image/png')
-    except Exception as e:
-        app.logger.error(f"Error in /generate_wordcloud: {e}")
-        return jsonify({"error": f"Word cloud generation failed: {str(e)}"}), 500
-
-@app.route('/generate_trend_graph', methods=['POST'])
+@app.post("/generate_trend_graph")
 def generate_trend_graph():
+    """
+    Line chart over time. Body:
+      { "sentiment_data": [ {"timestamp":"...","sentiment":-1|0|1}, ... ] }
+    """
+    data = request.get_json(force=True) or {}
+    sd = data.get("sentiment_data", [])
+    if not sd:
+        return jsonify({"error": "No sentiment data provided"}), 400
+
+    df = pd.DataFrame(sd)
+    if "timestamp" not in df or "sentiment" not in df:
+        return jsonify({"error": "Bad payload"}), 400
+
+    df["timestamp"] = pd.to_datetime(df["timestamp"], errors="coerce")
+    df = df.dropna(subset=["timestamp"])
+    df["sentiment"] = pd.to_numeric(df["sentiment"], errors="coerce").fillna(0).astype(int)
+
+    # resample to hour to smooth
+    df = df.set_index("timestamp").resample("H")["sentiment"].mean()
+
+    plt.figure(figsize=(10, 4))
+    plt.plot(df.index, df.values, marker="o")
+    plt.title("Sentiment Trend")
+    plt.ylabel("Avg sentiment (-1..1)")
+    plt.grid(True)
+    ax = plt.gca()
+    ax.xaxis.set_major_formatter(mdates.DateFormatter("%Y-%m-%d %H:%M"))
+    plt.xticks(rotation=45)
+    plt.tight_layout()
+
+    buf = io.BytesIO()
+    plt.savefig(buf, format="PNG")
+    buf.seek(0)
+    plt.close()
+    return send_file(buf, mimetype="image/png")
+
+@app.post("/insights")
+def insights():
+    """
+    Rich analytics panel used by popup.
+    Body: { "comments": [ {"text":"...", "timestamp":"...", "authorId":"..."}, ... ] }
+    """
+    data = request.get_json(force=True) or {}
+    comments = data.get("comments", [])
+    if not comments:
+        return jsonify({"error": "No comments provided"}), 400
+
+    raw_texts = [c.get("text", "") for c in comments]
+    texts = [preprocess_comment(t) for t in raw_texts]
+    X = vectorizer.transform(texts)
     try:
-        data = request.get_json()
-        sentiment_data = data.get('sentiment_data')
+        preds = model.predict(X)
+    except Exception:
+        preds = model.predict(X.toarray())
+    preds = [str(p) for p in preds]
+    # normalize labels to -1/0/1 strings
+    preds = [ {"positive":"1","neutral":"0","negative":"-1"}.get(p.lower(), p) for p in preds ]
 
-        if not sentiment_data:
-            return jsonify({"error": "No sentiment data provided"}), 400
+    total = len(comments)
+    unique_commenters = len({c.get("authorId") for c in comments if c.get("authorId")})
+    avg_words = float(np.mean([len((c.get("text","")).split()) for c in comments])) if total else 0.0
+    avg_score = float(np.mean([int(p) for p in preds])) if preds else 0.0  # -1..1
 
-        # Convert sentiment_data to DataFrame
-        df = pd.DataFrame(sentiment_data)
-        df['timestamp'] = pd.to_datetime(df['timestamp'])
+    summary = {
+        "total": total,
+        "unique_commenters": unique_commenters,
+        "avg_comment_length": round(avg_words, 2),
+        "avg_sentiment_score_0_10": round(((avg_score + 1) / 2) * 10, 2),
+    }
 
-        # Set the timestamp as the index
-        df.set_index('timestamp', inplace=True)
+    dist = dict(Counter(preds))
+    ts = pd.to_datetime([c.get("timestamp") for c in comments], errors="coerce")
+    by_hour = (
+        pd.DataFrame({"h": ts.dt.hour, "y": [int(p) for p in preds]})
+        .dropna()
+        .groupby("h")["y"].mean()
+        .reindex(range(24), fill_value=0.0)
+        .round(3)
+        .reset_index()
+        .to_dict(orient="records")
+    )
 
-        # Ensure the 'sentiment' column is numeric
-        df['sentiment'] = df['sentiment'].astype(int)
+    # top comments
+    scored = list(zip(raw_texts, [int(p) for p in preds]))
+    top_positive = [{"text": t, "score": s} for t, s in sorted(scored, key=lambda x: x[1], reverse=True)[:10]]
+    top_negative = [{"text": t, "score": s} for t, s in sorted(scored, key=lambda x: x[1])[:10]]
 
-        # Map sentiment values to labels
-        sentiment_labels = {-1: 'Negative', 0: 'Neutral', 1: 'Positive'}
+    # keywords / bigrams
+    import string as _string
+    sw = set(stopwords.words("english"))
+    toks = []
+    for t in texts:
+        toks.extend([w for w in t.split() if w not in sw and w not in _string.punctuation and len(w) > 2])
+    top_words = [w for w, _ in Counter(toks).most_common(20)]
 
-        # Resample the data over monthly intervals and count sentiments
-        monthly_counts = df.resample('M')['sentiment'].value_counts().unstack(fill_value=0)
+    bigrams = []
+    for t in texts:
+        ws = [w for w in t.split() if w]
+        bigrams += list(zip(ws, ws[1:]))
+    top_bigrams = [" ".join(bg) for bg, _ in Counter(bigrams).most_common(20)]
 
-        # Calculate total counts per month
-        monthly_totals = monthly_counts.sum(axis=1)
+    top_commenters = [
+        {"authorId": a, "count": c}
+        for a, c in Counter([c.get("authorId","Unknown") for c in comments]).most_common(10)
+    ]
 
-        # Calculate percentages
-        monthly_percentages = (monthly_counts.T / monthly_totals).T * 100
+    return jsonify({
+        "summary": summary,
+        "distribution": {"-1": dist.get("-1", 0), "0": dist.get("0", 0), "1": dist.get("1", 0)},
+        "by_hour": by_hour,
+        "top_positive": top_positive,
+        "top_negative": top_negative,
+        "top_words": top_words,
+        "top_bigrams": top_bigrams,
+        "top_commenters": top_commenters
+    })
 
-        # Ensure all sentiment columns are present
-        for sentiment_value in [-1, 0, 1]:
-            if sentiment_value not in monthly_percentages.columns:
-                monthly_percentages[sentiment_value] = 0
-
-        # Sort columns by sentiment value
-        monthly_percentages = monthly_percentages[[-1, 0, 1]]
-
-        # Plotting
-        plt.figure(figsize=(12, 6))
-
-        colors = {
-            -1: 'red',     # Negative sentiment
-            0: 'gray',     # Neutral sentiment
-            1: 'green'     # Positive sentiment
-        }
-
-        for sentiment_value in [-1, 0, 1]:
-            plt.plot(
-                monthly_percentages.index,
-                monthly_percentages[sentiment_value],
-                marker='o',
-                linestyle='-',
-                label=sentiment_labels[sentiment_value],
-                color=colors[sentiment_value]
-            )
-
-        plt.title('Monthly Sentiment Percentage Over Time')
-        plt.xlabel('Month')
-        plt.ylabel('Percentage of Comments (%)')
-        plt.grid(True)
-        plt.xticks(rotation=45)
-
-        # Format the x-axis dates
-        plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%Y-%m'))
-        plt.gca().xaxis.set_major_locator(mdates.AutoDateLocator(maxticks=12))
-
-        plt.legend()
-        plt.tight_layout()
-
-        # Save the trend graph to a BytesIO object
-        img_io = io.BytesIO()
-        plt.savefig(img_io, format='PNG')
-        img_io.seek(0)
-        plt.close()
-
-        # Return the image as a response
-        return send_file(img_io, mimetype='image/png')
-    except Exception as e:
-        app.logger.error(f"Error in /generate_trend_graph: {e}")
-        return jsonify({"error": f"Trend graph generation failed: {str(e)}"}), 500
-
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5001, debug=True)
+# --------------------------
+# Entrypoint
+# --------------------------
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5002, debug=True)
