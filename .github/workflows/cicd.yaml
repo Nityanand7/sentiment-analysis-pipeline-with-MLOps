@@ -27,9 +27,6 @@ jobs:
     name: Continuous Delivery
     needs: integration
     runs-on: ubuntu-latest
-    outputs:
-      image-uri: ${{ steps.build-image.outputs.image }}
-      image-tag: ${{ steps.meta.outputs.tag }}
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -50,22 +47,16 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Compute image tag
-        id: meta
-        run: |
-          # Use short SHA; you can keep "latest" if you prefer
-          echo "tag=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-
       - name: Build, tag, and push image to Amazon ECR
-        id: build-image
         env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
-          IMAGE_TAG: ${{ steps.meta.outputs.tag }}
+          IMAGE_TAG: latest
         run: |
+          set -e
+          echo "Building $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
           docker build -t "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" .
           docker push "$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
-          echo "image=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG" >> "$GITHUB_OUTPUT"
 
   Continuous-Deployment:
     needs: build-and-push-ecr-image
@@ -85,10 +76,16 @@ jobs:
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Pull latest image
+      - name: Compute image URI and pull
+        id: pull
         env:
-          IMAGE_URI: ${{ needs.build-and-push-ecr-image.outputs.image-uri }}
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ secrets.ECR_REPOSITORY_NAME }}
         run: |
+          set -e
+          IMAGE_URI="$ECR_REGISTRY/$ECR_REPOSITORY:latest"
+          echo "IMAGE_URI=$IMAGE_URI" >> "$GITHUB_ENV"
+          echo "Pulling $IMAGE_URI"
           docker pull "$IMAGE_URI"
 
       - name: Stop and remove container if running (safe)
@@ -105,10 +102,14 @@ jobs:
 
       - name: Run Docker Image to serve users
         env:
-          IMAGE_URI: ${{ needs.build-and-push-ecr-image.outputs.image-uri }}
+          IMAGE_URI: ${{ env.IMAGE_URI }}
+          PORT_OUT: 8080
+          PORT_IN: 5002
         run: |
+          set -e
+          echo "Launching $IMAGE_URI on ${PORT_OUT}->${PORT_IN}"
           docker run -d --name cnncls \
-            -p 8080:5002 \
+            -p ${PORT_OUT}:${PORT_IN} \
             -e AWS_ACCESS_KEY_ID='${{ secrets.AWS_ACCESS_KEY_ID }}' \
             -e AWS_SECRET_ACCESS_KEY='${{ secrets.AWS_SECRET_ACCESS_KEY }}' \
             -e AWS_REGION='${{ secrets.AWS_REGION }}' \
