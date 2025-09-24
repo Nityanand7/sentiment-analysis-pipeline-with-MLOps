@@ -1,5 +1,5 @@
 const API_URL = "http://127.0.0.1:5002";
-const API_KEY = "AIzaSyBJavn1bDGrZ9R23_H3JfLEidpduvPBYFw";  // keep restricted
+const API_KEY = "*****************************";  // keep restricted
 
 // ======= DOM HELPERS =======
 const $ = (sel) => document.querySelector(sel);
