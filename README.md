@@ -152,3 +152,7 @@ python flask_app/app.py
 
 ------------------------------------------------------------------------
 
+## Attribution
+
+This project includes modified code from [https://github.com/entbappy], licensed under the MIT License.
+
