@@ -3,6 +3,10 @@ name: workflow
 on:
   push:
     branches: [ main ]
+    paths-ignore:
+      - 'README.md'
+      - 'docs/**'
+      - 'readme_images/**'  # if you have images
   workflow_dispatch:
 
 permissions:
